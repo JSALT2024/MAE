@@ -14,11 +14,10 @@ import json
 import numpy as np
 import os
 import time
-from pathlib import Path
+import wandb
 
 import torch
 import torch.backends.cudnn as cudnn
-from torch.utils.tensorboard import SummaryWriter
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 
@@ -82,6 +81,14 @@ def get_args_parser():
     parser.add_argument('--resume', default='',
                         help='resume from checkpoint')
 
+    # Wandb parameters
+    parser.add_argument('--wandb_api_key', default="", type=str)
+    parser.add_argument('--entity', type=str)
+    parser.add_argument('--project', default="", type=str)
+    parser.add_argument('--group', type=str, help="Name of group in wandb.")
+    parser.add_argument('--name', default="", type=str, help="Name of experiment in wandb.")
+    parser.add_argument('--tags', nargs='*', type=str)
+
     parser.add_argument('--start_epoch', default=0, type=int, metavar='N',
                         help='start epoch')
     parser.add_argument('--num_workers', default=10, type=int)
@@ -101,6 +108,24 @@ def get_args_parser():
     return parser
 
 
+def init_wandb(args):
+    args = vars(args)
+    if args["wandb_api_key"]:
+        os.environ['WANDB_API_KEY'] = args["wandb_api_key"]
+    del args["wandb_api_key"]
+
+    if args["project"] and os.environ['WANDB_API_KEY']:
+        # initialize wandb
+        kwarg_names = ["group", "name", "entity", "tags"]
+        wandb_kwargs = {n: args[n] for n in kwarg_names if n in args and n}
+
+        wandb.init(
+            project=args["project"],
+            config=args,
+            **wandb_kwargs
+        )
+
+
 def main(args):
     misc.init_distributed_mode(args)
 
@@ -118,10 +143,10 @@ def main(args):
 
     # simple augmentation
     transform_train = transforms.Compose([
-            transforms.RandomResizedCrop(args.input_size, scale=(0.2, 1.0), interpolation=3),  # 3 is bicubic
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
+        transforms.RandomResizedCrop(args.input_size, scale=(0.2, 1.0), interpolation=3),  # 3 is bicubic
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
     dataset_train = datasets.ImageFolder(os.path.join(args.data_path, 'train'), transform=transform_train)
     print(dataset_train)
 
@@ -135,12 +160,6 @@ def main(args):
     else:
         sampler_train = torch.utils.data.RandomSampler(dataset_train)
 
-    if global_rank == 0 and args.log_dir is not None:
-        os.makedirs(args.log_dir, exist_ok=True)
-        log_writer = SummaryWriter(log_dir=args.log_dir)
-    else:
-        log_writer = None
-
     data_loader_train = torch.utils.data.DataLoader(
         dataset_train, sampler=sampler_train,
         batch_size=args.batch_size,
@@ -148,7 +167,7 @@ def main(args):
         pin_memory=args.pin_mem,
         drop_last=True,
     )
-    
+
     # define the model
     model = models_mae.__dict__[args.model](norm_pix_loss=args.norm_pix_loss)
 
@@ -158,7 +177,7 @@ def main(args):
     print("Model = %s" % str(model_without_ddp))
 
     eff_batch_size = args.batch_size * args.accum_iter * misc.get_world_size()
-    
+
     if args.lr is None:  # only base_lr is specified
         args.lr = args.blr * eff_batch_size / 256
 
@@ -171,7 +190,7 @@ def main(args):
     if args.distributed:
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu], find_unused_parameters=True)
         model_without_ddp = model.module
-    
+
     # following timm: set wd as 0 for bias and norm layers
     param_groups = optim_factory.param_groups_weight_decay(model_without_ddp, args.weight_decay)
     optimizer = torch.optim.AdamW(param_groups, lr=args.lr, betas=(0.9, 0.95))
@@ -188,7 +207,6 @@ def main(args):
         train_stats = train_one_epoch(
             model, data_loader_train,
             optimizer, device, epoch, loss_scaler,
-            log_writer=log_writer,
             args=args
         )
         if args.output_dir and (epoch % 20 == 0 or epoch + 1 == args.epochs):
@@ -197,11 +215,9 @@ def main(args):
                 loss_scaler=loss_scaler, epoch=epoch)
 
         log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
-                        'epoch': epoch,}
+                     'epoch': epoch, }
 
         if args.output_dir and misc.is_main_process():
-            if log_writer is not None:
-                log_writer.flush()
             with open(os.path.join(args.output_dir, "log.txt"), mode="a", encoding="utf-8") as f:
                 f.write(json.dumps(log_stats) + "\n")
 
@@ -213,6 +229,16 @@ def main(args):
 if __name__ == '__main__':
     args = get_args_parser()
     args = args.parse_args()
+
     if args.output_dir:
-        Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+        experiment_name = datetime.datetime.now().strftime("%d-%m_%H-%M-%S")
+        if args.name:
+            experiment_name = f"{args.name}-{experiment_name}"
+        experiment_folder = os.path.join(args.output_dir, experiment_name)
+        os.makedirs(experiment_folder)
+        args.output_dir = experiment_folder
+
+    init_wandb(args)
     main(args)
+    if wandb.run is not None:
+        wandb.finish()
