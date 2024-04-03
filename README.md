@@ -5,18 +5,20 @@
 nvcr.io/nvidia/pytorch:23.11-py3
       +
 timm==0.9.16
+wandb
 ```
 
 ## Train
 ```bash
-JOB_DIR="job_dirs/experiment_name"
+JOB_DIR="job_dirs"
 DATA_DIR="path/to/dataset"
 
-mkdir ${JOB_DIR}
+WANDB_API_KEY="..."
+PROJECT_NAME="..."
+EXPERIMENT_NAME="..."
 
 python mae/main_pretrain.py \
     --output_dir ${JOB_DIR} \
-    --log_dir ${JOB_DIR} \
     --data_path ${DATA_DIR} \
     --batch_size 32 \
     --model mae_vit_base_patch16 \
@@ -26,7 +28,11 @@ python mae/main_pretrain.py \
     --warmup_epochs 5 \
     --num_workers 8 \
     --blr 1.5e-4 \
-    --weight_decay 0.05
+    --weight_decay 0.05 \
+    --wandb_api_key ${WANDB_API_KEY} \
+    --project ${PROJECT_NAME} \
+    --name ${EXPERIMENT_NAME} 
+
 ```
 ```
 path/to/dataset
