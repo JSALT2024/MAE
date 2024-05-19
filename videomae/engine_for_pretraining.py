@@ -7,9 +7,11 @@ import utils
 from einops import rearrange
 from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 
+import wandb
+
 def train_one_epoch(model: torch.nn.Module, data_loader: Iterable, optimizer: torch.optim.Optimizer,
                     device: torch.device, epoch: int, loss_scaler, max_norm: float = 0, patch_size: int = 16, 
-                    normlize_target: bool = True, log_writer=None, lr_scheduler=None, start_steps=None,
+                    normlize_target: bool = True, lr_scheduler=None, start_steps=None,
                     lr_schedule_values=None, wd_schedule_values=None):
     model.train()
     metric_logger = utils.MetricLogger(delimiter="  ")
@@ -87,15 +89,17 @@ def train_one_epoch(model: torch.nn.Module, data_loader: Iterable, optimizer: to
                 weight_decay_value = group["weight_decay"]
         metric_logger.update(weight_decay=weight_decay_value)
         metric_logger.update(grad_norm=grad_norm)
-
-        if log_writer is not None:
-            log_writer.update(loss=loss_value, head="loss")
-            log_writer.update(loss_scale=loss_scale_value, head="opt")
-            log_writer.update(lr=max_lr, head="opt")
-            log_writer.update(min_lr=min_lr, head="opt")
-            log_writer.update(weight_decay=weight_decay_value, head="opt")
-            log_writer.update(grad_norm=grad_norm, head="opt")
-            log_writer.set_step()
+        
+        if wandb.run is not None:
+            epoch_step = (len(data_loader)*epoch) + step
+            wandb.log({
+                'train_loss': loss_value, 
+                'loss_scale': loss_scale_value,
+                'lr': max_lr,
+                'min_lr': min_lr,
+                'weight_decay': weight_decay_value,
+                'grad_norm': grad_norm,
+            }, epoch_step)
 
         if lr_scheduler is not None:
             lr_scheduler.step_update(start_steps + step)

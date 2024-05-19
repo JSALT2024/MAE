@@ -12,10 +12,8 @@ from pathlib import Path
 import subprocess
 import torch
 import torch.distributed as dist
-from torch._six import inf
+from torch import inf
 import random
-
-from tensorboardX import SummaryWriter
 
 
 class SmoothedValue(object):
@@ -162,30 +160,6 @@ class MetricLogger(object):
         total_time_str = str(datetime.timedelta(seconds=int(total_time)))
         print('{} Total time: {} ({:.4f} s / it)'.format(
             header, total_time_str, total_time / len(iterable)))
-
-
-class TensorboardLogger(object):
-    def __init__(self, log_dir):
-        self.writer = SummaryWriter(logdir=log_dir)
-        self.step = 0
-
-    def set_step(self, step=None):
-        if step is not None:
-            self.step = step
-        else:
-            self.step += 1
-
-    def update(self, head='scalar', step=None, **kwargs):
-        for k, v in kwargs.items():
-            if v is None:
-                continue
-            if isinstance(v, torch.Tensor):
-                v = v.item()
-            assert isinstance(v, (float, int))
-            self.writer.add_scalar(head + "/" + k, v, self.step if step is None else step)
-
-    def flush(self):
-        self.writer.flush()
 
 def seed_worker(worker_id):
     worker_seed = torch.initial_seed() % 2**32

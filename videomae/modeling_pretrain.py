@@ -203,6 +203,8 @@ class PretrainVisionTransformer(nn.Module):
                  tubelet_size=2,
                  num_classes=0, # avoid the error from create_fn in timm
                  in_chans=0, # avoid the error from create_fn in timm
+                 pretrained_cfg=None,
+                 pretrained_cfg_overlay=None,
                  ):
         super().__init__()
         self.encoder = PretrainVisionTransformerEncoder(

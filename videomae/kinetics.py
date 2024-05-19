@@ -11,6 +11,7 @@ from decord import VideoReader, cpu
 from torch.utils.data import Dataset
 import video_transforms as video_transforms 
 import volume_transforms as volume_transforms
+from tqdm import tqdm
 
 class VideoClsDataset(Dataset):
     """Load your own video classification dataset."""
@@ -554,3 +555,85 @@ class VideoMAE(torch.utils.data.Dataset):
         except:
             raise RuntimeError('Error occured in reading frames {} from video {} of duration {}.'.format(frame_id_list, directory, duration))
         return sampled_list
+
+    
+class VideoFolder(VideoMAE):
+    def __init__(self,
+                 root,
+                 video_ext='mp4',
+                 num_segments=1,
+                 new_length=1,
+                 new_step=1,
+                 transform=None,
+                 temporal_jitter=False,
+                 video_loader=False,
+                 use_decord=False,
+                 check_files=False,
+                 lazy_init=False):
+
+        super(VideoMAE, self).__init__()
+        self.root = root
+        self.num_segments = num_segments
+        self.new_length = new_length
+        self.new_step = new_step
+        self.skip_length = self.new_length * self.new_step
+        self.temporal_jitter = temporal_jitter
+        self.video_loader = video_loader
+        self.video_ext = video_ext
+        self.use_decord = use_decord
+        self.transform = transform
+        self.check_files = check_files
+            
+        self.clips = []
+        if not lazy_init:
+            self.clips = self._make_dataset(root)
+
+
+    def __getitem__(self, index):
+        if not self.clips:
+            raise RuntimeError('Dataset was not initialized. Initilaize self.clips or set lazy_init=False.')
+
+        directory = self.clips[index]
+        if self.video_loader:
+            if '.' in directory.split('/')[-1]:
+                # data in the "setting" file already have extension, e.g., demo.mp4
+                video_name = directory
+            else:
+                # data in the "setting" file do not have extension, e.g., demo
+                # So we need to provide extension (i.e., .mp4) to complete the file name.
+                video_name = '{}.{}'.format(directory, self.video_ext)
+
+            decord_vr = decord.VideoReader(video_name, num_threads=1)
+            duration = len(decord_vr)
+        
+        segment_indices, skip_offsets = self._sample_train_indices(duration)
+
+        images = self._video_TSN_decord_batch_loader(directory, decord_vr, duration, segment_indices, skip_offsets)
+        process_data, mask = self.transform((images, None)) # T*C,H,W
+        process_data = process_data.view((self.new_length, 3) + process_data.size()[-2:]).transpose(0,1)  # T*C,H,W -> T,C,H,W -> C,T,H,W
+        
+        return (process_data, mask)
+    
+
+    def _make_dataset(self, video_folder):
+        video_names = os.listdir(video_folder)
+        clips = [os.path.join(video_folder, name) for name in video_names]
+        
+        if self.check_files:
+            print("Starting file check:")
+            _clips = []
+            duration = []
+            
+            for path in tqdm(clips):
+                try:
+                    video = decord.VideoReader(path, num_threads=8)
+                    duration.append(len(video))
+                    _clips.append(path)
+                except:
+                    # print(f"    Could not read: {path}")
+                    pass
+            print(f"Clips: {len(clips)} -> {len(_clips)}")
+            print(f"Video duration: Min: {np.min(duration)} frames, Max: {np.max(duration)} frames, Mean: {np.mean(duration):3f} frames")
+            clips = _clips
+                
+        return clips

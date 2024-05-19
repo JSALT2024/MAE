@@ -9,11 +9,13 @@ import os
 from pathlib import Path
 from timm.models import create_model
 from optim_factory import create_optimizer
-from datasets import build_pretraining_dataset
+from datasets import DataAugmentationForVideoMAE
+from kinetics import VideoFolder
 from engine_for_pretraining import train_one_epoch
 from utils import NativeScalerWithGradNormCount as NativeScaler
 import utils
 import modeling_pretrain
+import wandb
 
 
 def get_args():
@@ -101,7 +103,7 @@ def get_args():
 
     parser.add_argument('--start_epoch', default=0, type=int, metavar='N',
                         help='start epoch')
-    parser.add_argument('--num_workers', default=10, type=int)
+    parser.add_argument('--num_workers', default=8, type=int)
     parser.add_argument('--pin_mem', action='store_true',
                         help='Pin CPU memory in DataLoader for more efficient (sometimes) transfer to GPU.')
     parser.add_argument('--no_pin_mem', action='store_false', dest='pin_mem',
@@ -114,9 +116,34 @@ def get_args():
     parser.add_argument('--local_rank', default=-1, type=int)
     parser.add_argument('--dist_on_itp', action='store_true')
     parser.add_argument('--dist_url', default='env://', help='url used to set up distributed training')
-
+    
+    # Wandb parameters
+    parser.add_argument('--wandb_api_key', default="", type=str)
+    parser.add_argument('--entity', type=str)
+    parser.add_argument('--project', default="", type=str)
+    parser.add_argument('--group', type=str, help="Name of group in wandb.")
+    parser.add_argument('--name', default="", type=str, help="Name of experiment in wandb.")
+    parser.add_argument('--tags', nargs='*', type=str)
+    
     return parser.parse_args()
 
+
+def init_wandb(args):
+    args = vars(args)
+    if args["wandb_api_key"]:
+        os.environ['WANDB_API_KEY'] = args["wandb_api_key"]
+    del args["wandb_api_key"]
+
+    if args["project"] and os.environ['WANDB_API_KEY']:
+        # initialize wandb
+        kwarg_names = ["group", "name", "entity", "tags"]
+        wandb_kwargs = {n: args[n] for n in kwarg_names if n in args and n}
+
+        wandb.init(
+            project=args["project"],
+            config=args,
+            **wandb_kwargs
+        )
 
 def get_model(args):
     print(f"Creating model: {args.model}")
@@ -152,8 +179,18 @@ def main(args):
     args.patch_size = patch_size
 
     # get dataset
-    dataset_train = build_pretraining_dataset(args)
-
+    #dataset_train = build_pretraining_dataset(args)
+    transform = DataAugmentationForVideoMAE(args)
+    dataset_train = VideoFolder(
+        root=args.data_path,
+        new_length=args.num_frames,
+        new_step=args.sampling_rate,
+        transform=transform,
+        temporal_jitter=False,
+        video_loader=True,
+        use_decord=True,
+        check_files=True
+    )
 
     num_tasks = utils.get_world_size()
     global_rank = utils.get_rank()
@@ -166,13 +203,6 @@ def main(args):
         dataset_train, num_replicas=num_tasks, rank=sampler_rank, shuffle=True
     )
     print("Sampler_train = %s" % str(sampler_train))
-
-
-    if global_rank == 0 and args.log_dir is not None:
-        os.makedirs(args.log_dir, exist_ok=True)
-        log_writer = utils.TensorboardLogger(log_dir=args.log_dir)
-    else:
-        log_writer = None
 
     data_loader_train = torch.utils.data.DataLoader(
         dataset_train, sampler=sampler_train,
@@ -213,8 +243,7 @@ def main(args):
     )
     if args.weight_decay_end is None:
         args.weight_decay_end = args.weight_decay
-    wd_schedule_values = utils.cosine_scheduler(
-        args.weight_decay, args.weight_decay_end, args.epochs, num_training_steps_per_epoch)
+    wd_schedule_values = utils.cosine_scheduler(args.weight_decay, args.weight_decay_end, args.epochs, num_training_steps_per_epoch)
     print("Max WD = %.7f, Min WD = %.7f" % (max(wd_schedule_values), min(wd_schedule_values)))
 
     utils.auto_load_model(
@@ -225,18 +254,17 @@ def main(args):
     for epoch in range(args.start_epoch, args.epochs):
         if args.distributed:
             data_loader_train.sampler.set_epoch(epoch)
-        if log_writer is not None:
-            log_writer.set_step(epoch * num_training_steps_per_epoch)
+            
         train_stats = train_one_epoch(
             model, data_loader_train,
             optimizer, device, epoch, loss_scaler,
-            args.clip_grad, log_writer=log_writer,
-            start_steps=epoch * num_training_steps_per_epoch,
+            args.clip_grad, start_steps=epoch * num_training_steps_per_epoch,
             lr_schedule_values=lr_schedule_values,
             wd_schedule_values=wd_schedule_values,
             patch_size=patch_size[0],
             normlize_target=args.normlize_target,
         )
+        
         if args.output_dir:
             if (epoch + 1) % args.save_ckpt_freq == 0 or epoch + 1 == args.epochs:
                 utils.save_model(
@@ -247,8 +275,6 @@ def main(args):
                      'epoch': epoch, 'n_parameters': n_parameters}
 
         if args.output_dir and utils.is_main_process():
-            if log_writer is not None:
-                log_writer.flush()
             with open(os.path.join(args.output_dir, "log.txt"), mode="a", encoding="utf-8") as f:
                 f.write(json.dumps(log_stats) + "\n")
 
@@ -259,6 +285,16 @@ def main(args):
 
 if __name__ == '__main__':
     opts = get_args()
+
     if opts.output_dir:
-        Path(opts.output_dir).mkdir(parents=True, exist_ok=True)
+        experiment_name = datetime.datetime.now().strftime("%d-%m_%H-%M-%S")
+        if opts.name:
+            experiment_name = f"{opts.name}-{experiment_name}"
+        experiment_folder = os.path.join(opts.output_dir, experiment_name)
+        os.makedirs(experiment_folder)
+        opts.output_dir = experiment_folder
+    
+    init_wandb(opts)
     main(opts)
+    if wandb.run is not None:
+        wandb.finish()
