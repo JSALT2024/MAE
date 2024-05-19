@@ -64,12 +64,10 @@ def train_one_epoch(model: torch.nn.Module,
         metric_logger.update(lr=lr)
 
         loss_value_reduce = misc.all_reduce_mean(loss_value)
-        if wandb.run is not None and (data_iter_step + 1) % accum_iter == 0:
-            """ We use epoch_1000x as the x-axis in tensorboard.
-            This calibrates different curves when batch size changes.
-            """
-            epoch_1000x = int((data_iter_step / len(data_loader) + epoch) * 1000)
-            wandb.log({'train_loss': loss_value_reduce, 'lr': lr}, epoch_1000x)
+        if wandb.run is not None:
+            epoch_step = (len(data_loader)*epoch) + data_iter_step
+            wandb.log({'train_loss': loss_value_reduce, 'lr': lr}, epoch_step)
+            
 
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
