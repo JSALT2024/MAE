@@ -1,4 +1,4 @@
-# MAE
+
 
 ## Environment
 ```
@@ -6,7 +6,10 @@ nvcr.io/nvidia/pytorch:23.11-py3
       +
 timm==0.9.16
 wandb
+decord        # VideoMAE
 ```
+
+# MAE
 
 ## Train
 ```bash
@@ -44,3 +47,5 @@ path/to/dataset
     ├── class_1
     └── class_k
 ```
+
+# VideoMAE
