@@ -116,6 +116,7 @@ def get_args():
     parser.add_argument('--local_rank', default=-1, type=int)
     parser.add_argument('--dist_on_itp', action='store_true')
     parser.add_argument('--dist_url', default='env://', help='url used to set up distributed training')
+    parser.add_argument('--force_single_gpu', action='store_true', default=False)
     
     # Wandb parameters
     parser.add_argument('--wandb_api_key', default="", type=str)
@@ -128,7 +129,7 @@ def get_args():
     return parser.parse_args()
 
 
-def init_wandb(args):
+def init_wandb(args):    
     args = vars(args)
     if args["wandb_api_key"]:
         os.environ['WANDB_API_KEY'] = args["wandb_api_key"]
@@ -189,7 +190,7 @@ def main(args):
         temporal_jitter=False,
         video_loader=True,
         use_decord=True,
-        check_files=True
+        check_files=False
     )
 
     num_tasks = utils.get_world_size()
@@ -249,6 +250,9 @@ def main(args):
     utils.auto_load_model(
         args=args, model=model, model_without_ddp=model_without_ddp, optimizer=optimizer, loss_scaler=loss_scaler)
     torch.cuda.empty_cache()
+
+    if wandb.run is not None:
+        wandb.config.update(vars(args), allow_val_change=True)
     print(f"Start training for {args.epochs} epochs")
     start_time = time.time()
     for epoch in range(args.start_epoch, args.epochs):
@@ -291,10 +295,20 @@ if __name__ == '__main__':
         if opts.name:
             experiment_name = f"{opts.name}-{experiment_name}"
         experiment_folder = os.path.join(opts.output_dir, experiment_name)
-        os.makedirs(experiment_folder)
+        os.makedirs(experiment_folder, exist_ok=True)
         opts.output_dir = experiment_folder
     
-    init_wandb(opts)
+    local_rank = 0
+    if opts.dist_on_itp:
+        local_rank = int(os.environ['OMPI_COMM_WORLD_LOCAL_RANK'])
+    elif 'SLURM_PROCID' in os.environ:
+        local_rank = int(os.environ['SLURM_LOCALID'])
+    elif 'RANK' in os.environ and 'WORLD_SIZE' in os.environ:
+        local_rank = int(os.environ['LOCAL_RANK'])
+
+    if local_rank == 0:
+        init_wandb(opts)
+
     main(opts)
     if wandb.run is not None:
         wandb.finish()

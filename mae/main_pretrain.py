@@ -104,6 +104,7 @@ def get_args_parser():
     parser.add_argument('--dist_on_itp', action='store_true')
     parser.add_argument('--dist_url', default='env://',
                         help='url used to set up distributed training')
+    parser.add_argument('--force_single_gpu', action='store_true', default=False)
 
     return parser
 
@@ -200,6 +201,8 @@ def main(args):
 
     misc.load_model(args=args, model_without_ddp=model_without_ddp, optimizer=optimizer, loss_scaler=loss_scaler)
 
+    if wandb.run is not None:
+        wandb.config.update(vars(args), allow_val_change=True)
     print(f"Start training for {args.epochs} epochs")
     start_time = time.time()
     for epoch in range(args.start_epoch, args.epochs):
@@ -236,10 +239,20 @@ if __name__ == '__main__':
         if args.name:
             experiment_name = f"{args.name}-{experiment_name}"
         experiment_folder = os.path.join(args.output_dir, experiment_name)
-        os.makedirs(experiment_folder)
+        os.makedirs(experiment_folder,  exist_ok=True)
         args.output_dir = experiment_folder
 
-    init_wandb(args)
+    local_rank = 0
+    if args.dist_on_itp:
+        local_rank = int(os.environ['OMPI_COMM_WORLD_LOCAL_RANK'])
+    elif 'SLURM_PROCID' in os.environ:
+        local_rank = int(os.environ['SLURM_LOCALID'])
+    elif 'RANK' in os.environ and 'WORLD_SIZE' in os.environ:
+        local_rank = int(os.environ['LOCAL_RANK'])
+
+    if local_rank == 0:
+        init_wandb(args)
+
     main(args)
     if wandb.run is not None:
         wandb.finish()
