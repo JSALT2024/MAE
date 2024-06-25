@@ -16,6 +16,28 @@ from torch import inf
 import random
 
 
+def print_slurm_env():
+    slurm_env = "\n".join(
+        [
+            "=" * 80,
+            f"SLURM Process: {os.environ.get('SLURM_PROCID', 'N/A')=}",
+            "=" * 80,
+            f"{os.environ.get('SLURM_NTASKS', 'N/A')=}",
+            f"{os.environ.get('SLURM_LOCALID', 'N/A')=}",
+            f"{os.environ.get('RANK', 'N/A')=}",
+            f"{os.environ.get('LOCAL_RANK', 'N/A')=}",
+            f"{os.environ.get('WORLD_SIZE', 'N/A')=}",
+            f"{os.environ.get('MASTER_ADDR', 'N/A')=}",
+            f"{os.environ.get('MASTER_PORT', 'N/A')=}",
+            f"{os.environ.get('ROCR_VISIBLE_DEVICES', 'N/A')=}",
+            f"{os.environ.get('SLURM_JOB_GPUS', 'N/A')=}",
+            f"{os.sched_getaffinity(0)=}",
+            f"{os.environ.get('TORCH_NCCL_ASYNC_ERROR_HANDLING', 'N/A')=}",
+            "-" * 80 + "\n",
+        ]
+    )
+    print(slurm_env, flush=True)
+
 class SmoothedValue(object):
     """Track a series of values and provide access to smoothed values over a
     window or the global series average.
@@ -259,6 +281,8 @@ def init_distributed_mode(args):
         print('Not using distributed mode')
         args.distributed = False
         return
+        
+    print_slurm_env()
 
     args.distributed = True
 
@@ -269,6 +293,25 @@ def init_distributed_mode(args):
                                          world_size=args.world_size, rank=args.rank)
     torch.distributed.barrier()
     # assert torch.distributed.is_initialized()
+    setup_for_distributed(args.rank == 0)
+
+def init_distributed_mode2(args):
+    if args.force_single_gpu:
+        print('Not using distributed mode')
+        args.distributed = False
+        return
+
+    args.rank = int(os.environ["RANK"])
+    args.gpu = int(os.environ["LOCAL_RANK"])
+    args.distributed = True
+
+    print_slurm_env()
+
+    torch.cuda.set_device(args.gpu)
+    args.dist_backend = 'nccl'
+    print('| distributed init (rank {}): {}, gpu {}'.format(args.rank, args.dist_url, args.gpu), flush=True)
+    torch.distributed.init_process_group(backend=args.dist_backend, timeout=datetime.timedelta(seconds=60))
+    torch.distributed.barrier()
     setup_for_distributed(args.rank == 0)
 
 

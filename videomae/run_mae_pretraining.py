@@ -1,3 +1,6 @@
+import sys
+print(sys.path)
+
 import argparse
 import datetime
 import numpy as np
@@ -7,15 +10,44 @@ import torch.backends.cudnn as cudnn
 import json
 import os
 from pathlib import Path
+import timm
 from timm.models import create_model
 from optim_factory import create_optimizer
 from datasets import DataAugmentationForVideoMAE
 from kinetics import VideoFolder
 from engine_for_pretraining import train_one_epoch
 from utils import NativeScalerWithGradNormCount as NativeScaler
+from utils import print_slurm_env
 import utils
 import modeling_pretrain
 import wandb
+
+
+def set_cpu_affinity():
+    local_rank = int(os.environ["LOCAL_RANK"])
+    LUMI_GPU_CPU_map = {
+        # A mapping from GCD to the closest CPU cores in a LUMI-G node
+        # Note that CPU cores 0, 8, 16, 24, 32, 40, 48, 56 are reserved for the
+        # system and not available for the user
+        # See https://docs.lumi-supercomputer.eu/hardware/lumig/
+        0: [49, 50, 51, 52, 53, 54, 55],
+        1: [57, 58, 59, 60, 61, 62, 63],
+        2: [17, 18, 19, 20, 21, 22, 23],
+        3: [25, 26, 27, 28, 29, 30, 31],
+        4: [1, 2, 3, 4, 5, 6, 7],
+        5: [9, 10, 11, 12, 13, 14, 15],
+        6: [33, 34, 35, 36, 37, 38, 39],
+        7: [41, 42, 43, 44, 45, 46, 47],
+    }
+    # cpu_list = LUMI_GPU_CPU_map[local_rank]
+    # print(f"Rank {rank} (local {local_rank}) binding to cpus: {cpu_list}")
+    # psutil.Process().cpu_affinity(cpu_list)
+    os.sched_setaffinity(
+        0, LUMI_GPU_CPU_map[local_rank]  # Set CPU binding for the current process (0)
+    )
+
+    # Print SLURM environment
+    print_slurm_env()
 
 
 def get_args():
@@ -103,7 +135,7 @@ def get_args():
 
     parser.add_argument('--start_epoch', default=0, type=int, metavar='N',
                         help='start epoch')
-    parser.add_argument('--num_workers', default=8, type=int)
+    parser.add_argument('--num_workers', default=7, type=int)
     parser.add_argument('--pin_mem', action='store_true',
                         help='Pin CPU memory in DataLoader for more efficient (sometimes) transfer to GPU.')
     parser.add_argument('--no_pin_mem', action='store_false', dest='pin_mem',
@@ -160,7 +192,9 @@ def get_model(args):
 
 
 def main(args):
-    utils.init_distributed_mode(args)
+    set_cpu_affinity()
+    
+    utils.init_distributed_mode2(args)
 
     print(args)
 
@@ -298,13 +332,7 @@ if __name__ == '__main__':
         os.makedirs(experiment_folder, exist_ok=True)
         opts.output_dir = experiment_folder
     
-    local_rank = 0
-    if opts.dist_on_itp:
-        local_rank = int(os.environ['OMPI_COMM_WORLD_LOCAL_RANK'])
-    elif 'SLURM_PROCID' in os.environ:
-        local_rank = int(os.environ['SLURM_LOCALID'])
-    elif 'RANK' in os.environ and 'WORLD_SIZE' in os.environ:
-        local_rank = int(os.environ['LOCAL_RANK'])
+    local_rank = int(os.environ["LOCAL_RANK"])
 
     if local_rank == 0:
         init_wandb(opts)
