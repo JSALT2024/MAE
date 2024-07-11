@@ -48,12 +48,15 @@ path/to/dataset
     └── class_k
 ```
 
-## Predict (embeding)
+## Predict (embedding)
 ```Python
 import sys
 import cv2
+import torch
 sys.path.append('mae')
 import predict_mae
+
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 arch='vit_base_patch16'
 checkpoint_path = "..."
@@ -62,7 +65,7 @@ image_path = "..."
 model = predict_mae.create_mae_model(arch, checkpoint_path)
 
 image = cv2.imread(image_path)
-mae_embedding = predict_mae.mae_predcit(image, model, predict_mae.transform_mae)
+mae_embedding = predict_mae.mae_predcit(image, model, predict_mae.transform_mae, device)
 ```
 
 # VideoMAE
