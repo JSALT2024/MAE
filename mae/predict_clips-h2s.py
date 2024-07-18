@@ -8,6 +8,7 @@ import json
 import numpy as np
 import datetime
 import argparse
+import pandas as pd
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -82,6 +83,7 @@ def get_args_parser():
 
     parser.add_argument('--output_folder', type=str)
     parser.add_argument('--clip_folder', type=str)
+    parser.add_argument('--annotations_path', type=str)
     parser.add_argument('--checkpoint_path', default="", type=str)
     parser.add_argument('--arch', default='vit_base_patch16', type=str)
     parser.add_argument('--num_splits', type=int)
@@ -94,13 +96,17 @@ def get_args_parser():
 if __name__ == "__main__":
     args = get_args_parser().parse_args()
 
-    output_file_name = f'YouTubeASL.mae.{args.split_name}.{args.split}.h5'
-    meta_file_name = f"YouTubeASL.mae.{args.split_name}.{args.split}.json"
+    output_file_name = f'H2S.mae.{args.split_name}.{args.split}.h5'
+    meta_file_name = f"H2S.mae.{args.split_name}.{args.split}.json"
     os.makedirs(args.output_folder, exist_ok=True)
 
     # load clip paths
     clip_names = os.listdir(args.clip_folder)
     clip_names = [file for file in clip_names if ".mp4" in file]
+    
+    annotations = pd.read_csv(args.annotations_path, sep='\t')
+    
+    clip_to_video = dict(zip(annotations.SENTENCE_NAME, annotations.VIDEO_ID))
 
     # group clips based on the video name
     clip_names_sorted = np.sort(clip_names)
@@ -109,7 +115,8 @@ if __name__ == "__main__":
         file = os.path.join(args.clip_folder, file)
         name = os.path.basename(file)
         name_split = name.split(".")[:-1]
-        video_name = ".".join(name_split[:-1])
+        clip_name = ".".join(name_split)
+        video_name = clip_to_video[clip_name]
         if video_name in video_to_clips:
             video_to_clips[video_name].append(file)
         else:
@@ -126,7 +133,6 @@ if __name__ == "__main__":
     print(idxs)
     print(f"Number of splits: {len(idxs)}")
     print(f"Number of videos: {len(video_names)}")
-    
 
     # load model
     model = predict_mae.create_mae_model(args.arch, args.checkpoint_path)
@@ -200,5 +206,5 @@ if __name__ == "__main__":
                 data = json.load(f)
             merged_data.update(data)
 
-        with open(os.path.join(args.output_folder, f"YouTubeASL.mae.{args.split_name}.json"), "w") as f:
+        with open(os.path.join(args.output_folder, f"H2S.mae.{args.split_name}.json"), "w") as f:
             json.dump(merged_data, f)
