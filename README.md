@@ -63,6 +63,7 @@ checkpoint_path = "..."
 image_path = "..."
 
 model = predict_mae.create_mae_model(arch, checkpoint_path)
+model = model.to(device)
 
 image = cv2.imread(image_path)
 mae_embedding = predict_mae.mae_predcit(image, model, predict_mae.transform_mae, device)
