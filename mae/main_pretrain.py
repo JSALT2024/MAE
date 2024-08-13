@@ -25,10 +25,39 @@ import timm.optim.optim_factory as optim_factory
 
 import util.misc as misc
 from util.misc import NativeScalerWithGradNormCount as NativeScaler
+from util.misc import print_slurm_env
+from util.asl_dataset import Asl_Dataset
 
 import models_mae
 
 from engine_pretrain import train_one_epoch
+
+
+def set_cpu_affinity():
+    local_rank = int(os.environ["LOCAL_RANK"])
+    LUMI_GPU_CPU_map = {
+        # A mapping from GCD to the closest CPU cores in a LUMI-G node
+        # Note that CPU cores 0, 8, 16, 24, 32, 40, 48, 56 are reserved for the
+        # system and not available for the user
+        # See https://docs.lumi-supercomputer.eu/hardware/lumig/
+        0: [49, 50, 51, 52, 53, 54, 55],
+        1: [57, 58, 59, 60, 61, 62, 63],
+        2: [17, 18, 19, 20, 21, 22, 23],
+        3: [25, 26, 27, 28, 29, 30, 31],
+        4: [1, 2, 3, 4, 5, 6, 7],
+        5: [9, 10, 11, 12, 13, 14, 15],
+        6: [33, 34, 35, 36, 37, 38, 39],
+        7: [41, 42, 43, 44, 45, 46, 47],
+    }
+    # cpu_list = LUMI_GPU_CPU_map[local_rank]
+    # print(f"Rank {rank} (local {local_rank}) binding to cpus: {cpu_list}")
+    # psutil.Process().cpu_affinity(cpu_list)
+    os.sched_setaffinity(
+        0, LUMI_GPU_CPU_map[local_rank]  # Set CPU binding for the current process (0)
+    )
+
+    # Print SLURM environment
+    print_slurm_env()
 
 
 def get_args_parser():
@@ -119,6 +148,12 @@ def init_wandb(args):
         # initialize wandb
         kwarg_names = ["group", "name", "entity", "tags"]
         wandb_kwargs = {n: args[n] for n in kwarg_names if n in args and n}
+        if wandb_kwargs["name"] == "":
+            wandb_kwargs["name"] = "{}_epoch{}_batch{}_blr{}_{}".format(args["model"], args["epochs"],
+                                                                        args["batch_size"], args["blr"],
+                                                                        datetime.datetime.now().strftime(
+                                                                            "%d-%m_%H-%M-%S"))
+            print(wandb_kwargs["name"])
 
         wandb.init(
             project=args["project"],
@@ -128,7 +163,8 @@ def init_wandb(args):
 
 
 def main(args):
-    misc.init_distributed_mode(args)
+    set_cpu_affinity()
+    misc.init_distributed_mode2(args)
 
     print('job dir: {}'.format(os.path.dirname(os.path.realpath(__file__))))
     print("{}".format(args).replace(', ', ',\n'))
@@ -144,12 +180,14 @@ def main(args):
 
     # simple augmentation
     transform_train = transforms.Compose([
-        transforms.RandomResizedCrop(args.input_size, scale=(0.2, 1.0), interpolation=3),  # 3 is bicubic
-        transforms.RandomHorizontalFlip(),
+        #     transforms.RandomResizedCrop(args.input_size, scale=(0.2, 1.0), interpolation=3),  # 3 is bicubic
+        #     transforms.RandomHorizontalFlip(),
         transforms.ToTensor(),
-        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
-    dataset_train = datasets.ImageFolder(os.path.join(args.data_path, 'train'), transform=transform_train)
-    print(dataset_train)
+        transforms.Resize((224, 224)),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    ])
+    # dataset_train_orig = datasets.ImageFolder(os.path.join("/pfs/lustrep2/scratch/project_465000977/strakaja/MAE/MAE/data/images", 'train'), transform=transform_train)
+    dataset_train = Asl_Dataset(args.data_path, transform=transform_train)
 
     if True:  # args.distributed:
         num_tasks = misc.get_world_size()
@@ -170,9 +208,19 @@ def main(args):
     )
 
     # define the model
-    model = models_mae.__dict__[args.model](norm_pix_loss=args.norm_pix_loss)
+    print("Loading model...")
+    if args.resume == "":
+        model = models_mae.__dict__[args.model](norm_pix_loss=args.norm_pix_loss)
+    else:
+        model = getattr(models_mae, args.model)()
+        # load weights
+        checkpoint = torch.load(args.resume, map_location='cpu')
+        msg = model.load_state_dict(checkpoint['model'], strict=True)
+        print(msg)
 
+    print("Model loaded")
     model.to(device)
+    print(device)
 
     model_without_ddp = model
     print("Model = %s" % str(model_without_ddp))
@@ -239,16 +287,10 @@ if __name__ == '__main__':
         if args.name:
             experiment_name = f"{args.name}-{experiment_name}"
         experiment_folder = os.path.join(args.output_dir, experiment_name)
-        os.makedirs(experiment_folder,  exist_ok=True)
+        os.makedirs(experiment_folder, exist_ok=True)
         args.output_dir = experiment_folder
 
-    local_rank = 0
-    if args.dist_on_itp:
-        local_rank = int(os.environ['OMPI_COMM_WORLD_LOCAL_RANK'])
-    elif 'SLURM_PROCID' in os.environ:
-        local_rank = int(os.environ['SLURM_LOCALID'])
-    elif 'RANK' in os.environ and 'WORLD_SIZE' in os.environ:
-        local_rank = int(os.environ['LOCAL_RANK'])
+    local_rank = int(os.environ["LOCAL_RANK"])
 
     if local_rank == 0:
         init_wandb(args)

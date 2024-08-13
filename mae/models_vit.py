@@ -51,10 +51,11 @@ class VisionTransformer(timm.models.vision_transformer.VisionTransformer):
             outcome = x[:, 0]
 
         return outcome
-    
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+
+    def forward(self, x: torch.Tensor, use_head: bool = True) -> torch.Tensor:
         x = self.forward_features(x)
+        if use_head:
+            x = self.forward_head(x)
         return x
 
 

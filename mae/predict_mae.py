@@ -49,7 +49,7 @@ def mae_predict(
     images = [normalize_image(image, transform, image_size) for image in images]
     images = torch.stack(images).to(device)
 
-    prediction = model(images)
+    prediction = model(images, use_head=False)
     prediction = prediction.detach().cpu().numpy()
 
     return prediction

@@ -22,6 +22,29 @@ from torch import inf
 import subprocess
 
 
+def print_slurm_env():
+    slurm_env = "\n".join(
+        [
+            "=" * 80,
+            f"SLURM Process: {os.environ.get('SLURM_PROCID', 'N/A')=}",
+            "=" * 80,
+            f"{os.environ.get('SLURM_NTASKS', 'N/A')=}",
+            f"{os.environ.get('SLURM_LOCALID', 'N/A')=}",
+            f"{os.environ.get('RANK', 'N/A')=}",
+            f"{os.environ.get('LOCAL_RANK', 'N/A')=}",
+            f"{os.environ.get('WORLD_SIZE', 'N/A')=}",
+            f"{os.environ.get('MASTER_ADDR', 'N/A')=}",
+            f"{os.environ.get('MASTER_PORT', 'N/A')=}",
+            f"{os.environ.get('ROCR_VISIBLE_DEVICES', 'N/A')=}",
+            f"{os.environ.get('SLURM_JOB_GPUS', 'N/A')=}",
+            f"{os.sched_getaffinity(0)=}",
+            f"{os.environ.get('TORCH_NCCL_ASYNC_ERROR_HANDLING', 'N/A')=}",
+            "-" * 80 + "\n",
+        ]
+    )
+    print(slurm_env, flush=True)
+
+
 class SmoothedValue(object):
     """Track a series of values and provide access to smoothed values over a
     window or the global series average.
@@ -268,6 +291,28 @@ def init_distributed_mode(args):
     setup_for_distributed(args.rank == 0)
 
 
+def init_distributed_mode2(args):
+    if args.force_single_gpu:
+        print('Not using distributed mode')
+        setup_for_distributed(is_master=True)  # hack
+        args.distributed = False
+        return
+
+    args.rank = int(os.environ["RANK"])
+    args.gpu = int(os.environ["LOCAL_RANK"])
+    args.distributed = True
+
+    print_slurm_env()
+
+    torch.cuda.set_device(args.gpu)
+    args.dist_backend = 'nccl'
+    print('| distributed init (rank {}): {}, gpu {}'.format(args.rank, args.dist_url, args.gpu), flush=True)
+    torch.distributed.init_process_group(backend=args.dist_backend, timeout=datetime.timedelta(seconds=180))
+
+    torch.distributed.barrier()
+    setup_for_distributed(args.rank == 0)
+
+
 class NativeScalerWithGradNormCount:
     state_dict_key = "amp_scaler"
 
@@ -308,7 +353,8 @@ def get_grad_norm_(parameters, norm_type: float = 2.0) -> torch.Tensor:
     if norm_type == inf:
         total_norm = max(p.grad.detach().abs().max().to(device) for p in parameters)
     else:
-        total_norm = torch.norm(torch.stack([torch.norm(p.grad.detach(), norm_type).to(device) for p in parameters]), norm_type)
+        total_norm = torch.norm(torch.stack([torch.norm(p.grad.detach(), norm_type).to(device) for p in parameters]),
+                                norm_type)
     return total_norm
 
 
@@ -359,4 +405,3 @@ def all_reduce_mean(x):
         return x_reduce.item()
     else:
         return x
-    
