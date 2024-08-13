@@ -25,9 +25,9 @@ def save_to_h5(features_list_h5, label, index_dataset, chunk_batch, chunk_size):
 def add_to_h5(clip_name, clip_features, index_dataset, chunk_batch, chunk_size):
     feature_shape = clip_features.shape
     features_list_h5 = video_h5.create_dataset(
-        clip_name, 
-        shape=feature_shape, 
-        maxshape=(None,feature_shape[-1]), 
+        clip_name,
+        shape=feature_shape,
+        maxshape=(None, feature_shape[-1]),
         dtype=np.dtype('float16')
     )
     num_full_chunks = len(clip_features) // chunk_size
@@ -81,14 +81,22 @@ def load_video_cv(path: str):
 def get_args_parser():
     parser = argparse.ArgumentParser('', add_help=False)
 
-    parser.add_argument('--output_folder', type=str)
-    parser.add_argument('--clip_folder', type=str)
-    parser.add_argument('--annotations_path', type=str)
-    parser.add_argument('--checkpoint_path', default="", type=str)
-    parser.add_argument('--arch', default='vit_base_patch16', type=str)
-    parser.add_argument('--num_splits', type=int)
-    parser.add_argument('--split', type=int)
-    parser.add_argument('--split_name', default="train", type=str)
+    parser.add_argument('--clip_folder', type=str, help='Path to folder with clips.')
+    parser.add_argument('--output_folder', type=str, help='Path to folder where to save features.')
+    parser.add_argument('--checkpoint_path', default="", type=str, help="Path to pretrained weights.")
+    parser.add_argument('--arch', default='vit_base_patch16', type=str, help="Architecture of the model.")
+    parser.add_argument('--num_splits', type=int, help="Number of splits/shards dataset will be split into.")
+    parser.add_argument('--split', type=int, help="Index of the split/shard.")
+    parser.add_argument('--dataset_name', type=str, help="Name of the dataset. Used only for naming of the "
+                                                         "output file.")
+    parser.add_argument('--split_name', default="train", type=str, help="Name of the data subset examples: dev, "
+                                                                        "train, test. Used only for naming of the "
+                                                                        "output file.")
+
+    parser.add_argument('--annotation_file', default="", type=str, help="If the name is not in the format: "
+                                                                        "'video_name.time_stamp.mp4' and can't be "
+                                                                        "parsed, annotation file with: SENTENCE_NAME "
+                                                                        "and VIDEO_ID columns should be provided.")
 
     return parser
 
@@ -96,31 +104,42 @@ def get_args_parser():
 if __name__ == "__main__":
     args = get_args_parser().parse_args()
 
-    output_file_name = f'H2S.mae.{args.split_name}.{args.split}.h5'
-    meta_file_name = f"H2S.mae.{args.split_name}.{args.split}.json"
+    output_file_name = f'{args.dataset_name}.mae.{args.split_name}.{args.split}.h5'
+    meta_file_name = f"{args.dataset_name}.mae.{args.split_name}.{args.split}.json"
     os.makedirs(args.output_folder, exist_ok=True)
 
     # load clip paths
     clip_names = os.listdir(args.clip_folder)
     clip_names = [file for file in clip_names if ".mp4" in file]
-    
-    annotations = pd.read_csv(args.annotations_path, sep='\t')
-    
-    clip_to_video = dict(zip(annotations.SENTENCE_NAME, annotations.VIDEO_ID))
 
     # group clips based on the video name
     clip_names_sorted = np.sort(clip_names)
     video_to_clips = {}
-    for file in clip_names_sorted:
-        file = os.path.join(args.clip_folder, file)
-        name = os.path.basename(file)
-        name_split = name.split(".")[:-1]
-        clip_name = ".".join(name_split)
-        video_name = clip_to_video[clip_name]
-        if video_name in video_to_clips:
-            video_to_clips[video_name].append(file)
-        else:
-            video_to_clips[video_name] = [file]
+    if args.annotation_file:
+        annotations = pd.read_csv(args.annotations_path, sep='\t')
+        clip_to_video = dict(zip(annotations.SENTENCE_NAME, annotations.VIDEO_ID))
+
+        for file in clip_names_sorted:
+            file = os.path.join(args.clip_folder, file)
+            name = os.path.basename(file)
+            name_split = name.split(".")[:-1]
+            clip_name = ".".join(name_split)
+            video_name = clip_to_video[clip_name]
+            if video_name in video_to_clips:
+                video_to_clips[video_name].append(file)
+            else:
+                video_to_clips[video_name] = [file]
+
+    else:
+        for file in clip_names_sorted:
+            file = os.path.join(args.clip_folder, file)
+            name = os.path.basename(file)
+            name_split = name.split(".")[:-1]
+            video_name = ".".join(name_split[:-1])
+            if video_name in video_to_clips:
+                video_to_clips[video_name].append(file)
+            else:
+                video_to_clips[video_name] = [file]
 
     # split to chunks
     num_samples = len(video_to_clips)
@@ -140,8 +159,6 @@ if __name__ == "__main__":
 
     # h5py file initialization
     f_out = h5py.File(os.path.join(args.output_folder, output_file_name), 'w')
-    # special data type for numpy array with variable length
-    # dt = h5py.vlen_dtype(np.dtype('float16'))
 
     # predict
     prediction_times = []
@@ -183,8 +200,8 @@ if __name__ == "__main__":
         end_time = time.time()
         prediction_times.append(end_time - start_time)
         frames.append(len(video))
-        
-        print(f"[{video_idx+1}/{len(video_names)}]")
+
+        print(f"[{video_idx + 1}/{len(video_names)}]")
         print(f"average time: {np.mean(prediction_times):.3f}")
         print(f"average frames: {np.mean(frames):.2f}")
         secs = ((len(video_names) - (video_idx + 1)) * np.mean(prediction_times))
@@ -206,5 +223,5 @@ if __name__ == "__main__":
                 data = json.load(f)
             merged_data.update(data)
 
-        with open(os.path.join(args.output_folder, f"H2S.mae.{args.split_name}.json"), "w") as f:
+        with open(os.path.join(args.output_folder, f"{args.dataset_name}.mae.{args.split_name}.json"), "w") as f:
             json.dump(merged_data, f)
