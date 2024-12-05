@@ -77,10 +77,10 @@ mae_embedding = predict_mae.mae_predcit(image, model, predict_mae.transform_mae,
  - VIT head is not used (`model_vit -> forward`)
 
 ```bash
-python mae/create_features.py \
-  --clip_folder data/cropped_clips \
+python mae/create_mae_features.py \
+  --input_folder data/cropped_clips \
   --output_folder data/features \
-  --checkpoint_path checkpoints/model.pth \
+  --checkpoint checkpoints/model.pth \
   --arch vit_base_patch16 \
   --num_splits 10 \
   --split 0 \

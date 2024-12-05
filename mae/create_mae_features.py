@@ -9,6 +9,7 @@ import numpy as np
 import datetime
 import argparse
 import pandas as pd
+from collections import defaultdict
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
@@ -81,12 +82,8 @@ def load_video_cv(path: str):
 def get_args_parser():
     parser = argparse.ArgumentParser('', add_help=False)
 
-    parser.add_argument('--clip_folder', type=str, help='Path to folder with clips.')
+    parser.add_argument('--input_folder', type=str, help='Path to folder with clips.')
     parser.add_argument('--output_folder', type=str, help='Path to folder where to save features.')
-    parser.add_argument('--checkpoint_path', default="", type=str, help="Path to pretrained weights.")
-    parser.add_argument('--arch', default='vit_base_patch16', type=str, help="Architecture of the model.")
-    parser.add_argument('--num_splits', type=int, help="Number of splits/shards dataset will be split into.")
-    parser.add_argument('--split', type=int, help="Index of the split/shard.")
     parser.add_argument('--dataset_name', type=str, help="Name of the dataset. Used only for naming of the "
                                                          "output file.")
     parser.add_argument('--split_name', default="train", type=str, help="Name of the data subset examples: dev, "
@@ -98,6 +95,12 @@ def get_args_parser():
                                                                         "parsed, annotation file with: SENTENCE_NAME "
                                                                         "and VIDEO_ID columns should be provided.")
 
+    parser.add_argument('--checkpoint', default="", type=str, help="Path to pretrained weights.")
+    parser.add_argument('--arch', default='vit_base_patch16', type=str, help="Architecture of the model.")
+    parser.add_argument('--num_splits', type=int, help="Number of splits/shards dataset will be split into.")
+    parser.add_argument('--split', type=int, help="Index of the split/shard.")
+
+
     return parser
 
 
@@ -108,38 +111,26 @@ if __name__ == "__main__":
     meta_file_name = f"{args.dataset_name}.mae.{args.split_name}.{args.split}.json"
     os.makedirs(args.output_folder, exist_ok=True)
 
-    # load clip paths
-    clip_names = os.listdir(args.clip_folder)
-    clip_names = [file for file in clip_names if ".mp4" in file]
+    # prepare mapping between clip names and video names
+    video_to_clips = defaultdict(list)
+    clip_names = os.listdir(args.input_folder)
+    clip_names = [file for file in clip_names if file.endswith(".mp4")]
+    clip_names.sort()
+    for idx in range(len(clip_names)):
+        name_split = clip_names[idx].split(".")[:-1]
+        clip_names[idx] = ".".join(name_split)
 
-    # group clips based on the video name
-    clip_names_sorted = np.sort(clip_names)
-    video_to_clips = {}
     if args.annotation_file:
-        annotations = pd.read_csv(args.annotations_path, sep='\t')
-        clip_to_video = dict(zip(annotations.SENTENCE_NAME, annotations.VIDEO_ID))
-
-        for file in clip_names_sorted:
-            file = os.path.join(args.clip_folder, file)
-            name = os.path.basename(file)
-            name_split = name.split(".")[:-1]
-            clip_name = ".".join(name_split)
-            video_name = clip_to_video[clip_name]
-            if video_name in video_to_clips:
-                video_to_clips[video_name].append(file)
-            else:
-                video_to_clips[video_name] = [file]
-
+        annotations = pd.read_csv(args.annotation_file, sep='\t')
+        _clip_to_video = dict(zip(annotations.SENTENCE_NAME, annotations.VIDEO_ID))
+        for clip_name in clip_names:
+            video_to_clips[_clip_to_video[clip_name]].append(clip_name)
     else:
-        for file in clip_names_sorted:
-            file = os.path.join(args.clip_folder, file)
-            name = os.path.basename(file)
-            name_split = name.split(".")[:-1]
-            video_name = ".".join(name_split[:-1])
-            if video_name in video_to_clips:
-                video_to_clips[video_name].append(file)
-            else:
-                video_to_clips[video_name] = [file]
+        for clip_name in clip_names:
+            name_split = clip_name.split(".")[:-1]
+            video_name = ".".join(name_split)
+            video_to_clips[video_name].append(clip_name)
+    video_to_clips = dict(video_to_clips)
 
     # split to chunks
     num_samples = len(video_to_clips)
@@ -154,7 +145,7 @@ if __name__ == "__main__":
     print(f"Number of videos: {len(video_names)}")
 
     # load model
-    model = predict_mae.create_mae_model(args.arch, args.checkpoint_path)
+    model = predict_mae.create_mae_model(args.arch, args.checkpoint)
     model = model.to(device)
 
     # h5py file initialization
@@ -165,15 +156,12 @@ if __name__ == "__main__":
     frames = []
     metadata = {}
     for video_idx, video_name in enumerate(video_names):
-        clip_paths = video_to_clips[video_name]
+        clip_names = video_to_clips[video_name]
         metadata[video_name] = args.split
         video_h5 = f_out.create_group(video_name)
         start_time = time.time()
-        for clip_path in clip_paths:
-            # parse name
-            name = os.path.basename(clip_path)
-            name_split = name.split(".")[:-1]
-            clip_name = ".".join(name_split)
+        for clip_name in clip_names:
+            clip_path = os.path.join(args.input_folder, clip_name)
 
             # predict video features
             video, fps = load_video_cv(clip_path)
@@ -181,25 +169,25 @@ if __name__ == "__main__":
                 print("FAILED:", clip_path)
                 continue
             batches = batch_data(video, 16)
-            video_features = []
+            features = []
             for batch in batches:
-                features = predict_mae.mae_predict(batch, model, predict_mae.transform_mae, device)
-                video_features.append(features)
-            clip_features = np.concatenate(video_features, 0)
+                _features = predict_mae.mae_predict(batch, model, predict_mae.transform_mae, device)
+                features.append(_features)
+            features = np.concatenate(features, 0)
 
             # save features in hd5
             add_to_h5(
                 clip_name,
-                clip_features,
+                features,
                 index_dataset=0,
                 chunk_batch=1,
-                chunk_size=len(clip_features)
+                chunk_size=len(features)
             )
+            frames.append(len(video))
 
         # print stats
         end_time = time.time()
         prediction_times.append(end_time - start_time)
-        frames.append(len(video))
 
         print(f"[{video_idx + 1}/{len(video_names)}]")
         print(f"average time: {np.mean(prediction_times):.3f}")
