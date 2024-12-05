@@ -6,7 +6,7 @@ nvcr.io/nvidia/pytorch:23.11-py3
       +
 timm==0.9.16
 wandb
-decord        # VideoMAE
+decord
 ```
 
 # MAE
@@ -88,24 +88,4 @@ python mae/create_mae_features.py \
   --split_name train \
   --annotation_file data\how2sign_realigned_train.csv   # only if the name is in bad format
 ```
-
-
-
-# VideoMAE
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
